@@ -6,7 +6,9 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <semaphore.h>
+#include <time.h>
 
+//camera/mmal/raspberry specific libraries
 #include "bcm_host.h"
 #include "mmal.h"
 #include "util/mmal_default_components.h"
@@ -19,8 +21,12 @@
 #define MMAL_CAMERA_VIDEO_PORT 1
 #define MMAL_CAMERA_CAPTURE_PORT 2
 
-//will affect framerate
+//will affect framerate, it seems that if framerate is higher than possible shutter speed, it will be automatically lowered
 #define CAMERA_SHUTTER_SPEED 15000
+
+//framerate above 30 only possible for some resolution, depends on the camera
+//can also reduce the displayed portion of the camera on screen
+#define CAMERA_FRAMERATE 30
 
 //resolution needs to be smaller than the screen size
 #define CAMERA_RESOLUTION_X 1280
@@ -32,11 +38,15 @@ char *fbp;
 uint32_t screen_size_x = 0;
 uint32_t screen_size_y = 0;
 
+static int cur_sec;
+
 sem_t semaphore;
 
 void framebuffer_init();
-
 void output_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer);
+
+void init_time_keeping();
+float get_cur_time();
 
 void main(void){
     //sets up the framebuffer, will draw
@@ -74,8 +84,13 @@ void main(void){
     status = mmal_port_format_commit(video_port);
     CHECK_STATUS(status, "failed to commit format");
 
+    //second paramter of the second parameter is the denominator for the framerate
+    MMAL_PARAMETER_FRAME_RATE_T framerate_param = {{MMAL_PARAMETER_VIDEO_FRAME_RATE, sizeof(framerate_param)}, {CAMERA_FRAMERATE, 0}};
+    status = mmal_port_parameter_set(video_port, &framerate_param.hdr);
+    CHECK_STATUS(status, "failed to set framerate");
+
     //two buffers seem a good compromise, more will cause some latency
-    video_port->buffer_num = 2;
+    video_port->buffer_num = 3;
     pool = mmal_port_pool_create(video_port, video_port->buffer_num, video_port->buffer_size);
 
     video_port->userdata = (void *)pool->queue;
@@ -105,15 +120,29 @@ void main(void){
         CHECK_STATUS(status, "could not send buffer");
     }
 
+    MMAL_BUFFER_HEADER_T *buffer;
+    float time_since_report = 0.0f;
+    int count_frames = 0;
+
+    float start_time;
+    float end_time;
+    float start_copy_time;
+    float end_copy_time;
+
+    init_time_keeping();
+
     while(1){
-        MMAL_BUFFER_HEADER_T *buffer;
+        start_time = get_cur_time();
 
         //wait until a buffer has been received
         sem_wait(&semaphore);
 
         buffer = mmal_queue_get(pool->queue);
 
+        start_copy_time = get_cur_time();
+
         //draw the image on the top left corner of the framebuffer
+        //would be less costly to limit frambuffer size and just do a memcpy
         int offset_data = 0;
         for(int i = 0; i < CAMERA_RESOLUTION_Y; i++){
            for(int j = 0; j < CAMERA_RESOLUTION_X*4; j+=4){
@@ -127,9 +156,24 @@ void main(void){
            }
         }
 
+        end_copy_time = get_cur_time();
+        // printf("frame copy time: %f\n\r", end_copy_time-start_copy_time);
+
         //Send back the buffer to the port to be filled with an image again
         mmal_buffer_header_release(buffer);
         mmal_port_send_buffer(video_port, buffer);
+
+        end_time = get_cur_time();
+        float seconds = (float)(end_time - start_time);
+        time_since_report += seconds;
+        count_frames++;
+
+        if(time_since_report > 1.0f){
+            float framerate = count_frames/time_since_report;
+            printf("frequency: %fHz\n\r", framerate);
+            time_since_report = 0;
+            count_frames = 0;
+        }
     }
 
     //todo free the mmal and framebuffer ressources cleanly
@@ -148,6 +192,7 @@ void framebuffer_init(){
     screen_size_y = vinfo.yres;
 
     fbp = (char*)mmap(0, screen_size_x*screen_size_y*4, PROT_READ | PROT_WRITE, MAP_SHARED, fb_d, 0);
+    //draw a gradient background
     for(int i = 0; i < screen_size_y; i++){
         for(int j = 0; j < screen_size_x*4; j+=4){
             int idx = i*screen_size_x*4+j;
@@ -166,4 +211,17 @@ void output_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer){
 
    sem_post(&semaphore);
 
+}
+
+//clock_gettime is a better time keeping mechanism than other on the raspberry pi
+void init_time_keeping(){
+    struct timespec time_read;
+    clock_gettime(CLOCK_REALTIME, &time_read);
+    cur_sec = time_read.tv_sec; //global
+}
+
+float get_cur_time(){
+    struct timespec time_read;
+    clock_gettime(CLOCK_REALTIME, &time_read);
+    return (time_read.tv_sec-cur_sec)+time_read.tv_nsec/1000000000.0f;
 }
