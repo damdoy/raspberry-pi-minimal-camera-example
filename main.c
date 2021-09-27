@@ -160,7 +160,6 @@ void main(void){
         // printf("frame copy time: %f\n\r", end_copy_time-start_copy_time);
 
         //Send back the buffer to the port to be filled with an image again
-        mmal_buffer_header_release(buffer);
         mmal_port_send_buffer(video_port, buffer);
 
         end_time = get_cur_time();
