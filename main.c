@@ -22,7 +22,7 @@
 #define MMAL_CAMERA_CAPTURE_PORT 2
 
 //will affect framerate, it seems that if framerate is higher than possible shutter speed, it will be automatically lowered
-#define CAMERA_SHUTTER_SPEED 15000
+#define CAMERA_SHUTTER_SPEED 60000
 
 //framerate above 30 only possible for some resolution, depends on the camera
 //can also reduce the displayed portion of the camera on screen
@@ -68,7 +68,7 @@ void main(void){
     status = mmal_port_parameter_set_uint32(camera->control, MMAL_PARAMETER_SHUTTER_SPEED, CAMERA_SHUTTER_SPEED);
     CHECK_STATUS(status, "failed to set shutter speed");
 
-    video_port = camera->output[MMAL_CAMERA_VIDEO_PORT];
+    video_port = camera->output[MMAL_CAMERA_CAPTURE_PORT];
 
     format = video_port->format;
     format->encoding = MMAL_ENCODING_RGB24;
@@ -84,13 +84,14 @@ void main(void){
     status = mmal_port_format_commit(video_port);
     CHECK_STATUS(status, "failed to commit format");
 
+    //not needed in capture/still mode
     //second paramter of the second parameter is the denominator for the framerate
-    MMAL_PARAMETER_FRAME_RATE_T framerate_param = {{MMAL_PARAMETER_VIDEO_FRAME_RATE, sizeof(framerate_param)}, {CAMERA_FRAMERATE, 0}};
-    status = mmal_port_parameter_set(video_port, &framerate_param.hdr);
-    CHECK_STATUS(status, "failed to set framerate");
+    // MMAL_PARAMETER_FRAME_RATE_T framerate_param = {{MMAL_PARAMETER_VIDEO_FRAME_RATE, sizeof(framerate_param)}, {CAMERA_FRAMERATE, 0}};
+    // status = mmal_port_parameter_set(video_port, &framerate_param.hdr);
+    // CHECK_STATUS(status, "failed to set framerate");
 
-    //two buffers seem a good compromise, more will cause some latency
-    video_port->buffer_num = 3;
+    //only use one buffer in capture/still mode
+    video_port->buffer_num = 1;
     pool = mmal_port_pool_create(video_port, video_port->buffer_num, video_port->buffer_size);
 
     video_port->userdata = (void *)pool->queue;
@@ -107,6 +108,12 @@ void main(void){
     //necessary parameter to get the RGB data out of the video port
     status = mmal_port_parameter_set_boolean(video_port, MMAL_PARAMETER_CAPTURE, 1);
     CHECK_STATUS(status, "failed to set parameter capture");
+
+    status = mmal_port_parameter_set_boolean(camera->control,  MMAL_PARAMETER_CAMERA_BURST_CAPTURE, 1);
+    CHECK_STATUS(status, "cannot set MMAL_PARAMETER_CAMERA_BURST_CAPTURE");
+
+    // status = mmal_port_parameter_set_boolean(video_port, MMAL_PARAMETER_ZERO_COPY, MMAL_TRUE);
+    // CHECK_STATUS(status, "failed to set zero copy");
 
     //need to provide the buffers to the port
     int queue_length = mmal_queue_length(pool->queue);
@@ -162,6 +169,9 @@ void main(void){
         //Send back the buffer to the port to be filled with an image again
         mmal_port_send_buffer(video_port, buffer);
 
+        status = mmal_port_parameter_set_boolean(video_port, MMAL_PARAMETER_CAPTURE, 1);
+        CHECK_STATUS(status, "failed to set parameter capture");
+
         end_time = get_cur_time();
         float seconds = (float)(end_time - start_time);
         time_since_report += seconds;
@@ -209,7 +219,6 @@ void output_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer){
    mmal_queue_put(queue, buffer);
 
    sem_post(&semaphore);
-
 }
 
 //clock_gettime is a better time keeping mechanism than other on the raspberry pi
