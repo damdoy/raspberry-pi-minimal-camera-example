@@ -192,8 +192,8 @@ void framebuffer_init(){
 
     fbp = (char*)mmap(0, screen_size_x*screen_size_y*4, PROT_READ | PROT_WRITE, MAP_SHARED, fb_d, 0);
     //draw a gradient background
-    for(int i = 0; i < screen_size_y; i++){
-        for(int j = 0; j < screen_size_x*4; j+=4){
+    for(int i = 0; i < CAMERA_RESOLUTION_Y; i++){
+        for(int j = 0; j < CAMERA_RESOLUTION_X*4; j+=4){
             int idx = i*screen_size_x*4+j;
             fbp[idx] = (i*255)/screen_size_y;
             fbp[idx+1] = (j*255)/(screen_size_x*4);
